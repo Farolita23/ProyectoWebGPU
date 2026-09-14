@@ -1,3 +1,4 @@
+/// <reference types="@webgpu/types" />
 import './style.css'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
@@ -36,27 +37,63 @@ context.configure({
   alphaMode: 'premultiplied'
 })
 
-// Cargar el código del shader WGSL
+// ---------- Codigo shader WSGL ----------
 const shaderModule = device.createShaderModule({
   code: `
+    struct Uniforms {
+      bass: f32,
+      time: f32,
+    };
+
+    @binding(0) @group(0) var<uniform> uniforms: Uniforms;
+
+    struct VertexOutput {
+      @builtin(position) position: vec4f,
+      @location(0) color: vec4f,
+    };
+
     @vertex
-    fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4f {
-        var pos = array<vec2f, 3>(
-            vec2f(0.0, 0.5),
-            vec2f(-0.5, -0.5),
-            vec2f(0.5, -0.5)
-        );
-        return vec4f(pos[vertexIndex], 0.0, 1.0);
+    fn vs_main(
+      @builtin(vertex_index) vertexIndex: u32,
+      @builtin(instance_index) instanceIndex: u32
+    ) -> VertexOutput {
+      // Convertir el índice de instancia en un ángulo único para formar un anillo o espiral
+      let f_index = f32(instanceIndex);
+      let total_instances = 100.0;
+      let angle = (f_index / total_instances) * 6.2831853; // 2 * PI
+
+      // Radio afectado por el tiempo y los graves de la música
+      let base_radius = 0.3 + sin(uniforms.time * 1.5 + f_index * 0.1) * 0.1;
+      let radius = base_radius + uniforms.bass * 0.4;
+
+      let x = cos(angle + uniforms.time * 0.2) * radius;
+      let y = sin(angle + uniforms.time * 0.2) * radius;
+
+      // Forma base de cada partícula (un pequeño triángulo o punto desplazado)
+      var pos = array<vec2f, 3>(
+          vec2f(0.0, 0.02),
+          vec2f(-0.015, -0.015),
+          vec2f(0.015, -0.015)
+      );
+
+      let p = pos[vertexIndex] + vec2f(x, y);
+
+      var output: VertexOutput;
+      output.position = vec4f(p, 0.0, 1.0);
+      
+      // Color dinámico basado en la posición y la música
+      output.color = vec4f(0.23 + f_index/total_instances * 0.5, 0.5, 1.0 - uniforms.bass, 0.9);
+      return output;
     }
 
     @fragment
-    fn fs_main() -> @location(0) vec4f {
-        return vec4f(0.47, 0.35, 1.0, 1.0);
+    fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+        return input.color;
     }
   `
 });
 
-// Crear el pipeline de renderizado
+// ---------- Pipeline de renderizado ----------
 const pipeline = device.createRenderPipeline({
   layout: 'auto',
   vertex: {
@@ -132,17 +169,41 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
+const uniformBuffer = device.createBuffer({
+  size: 8,
+  usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+});
+
+const bindGroup = device.createBindGroup({
+  layout: pipeline.getBindGroupLayout(0),
+  entries: [
+    {
+      binding: 0,
+      resource: { buffer: uniformBuffer },
+    },
+  ],
+});
+
+let time = 0;
 
 function drawWebGPU() {
   requestAnimationFrame(drawWebGPU);
+  time += 0.016; // Incremento de tiempo por frame (~60fps)
 
-  // Obtener la textura actual del canvas en pantalla
+  let bass = 0;
+  if (analyser && freqData) {
+    analyser.getByteFrequencyData(freqData);
+    const bassBins = freqData.slice(0, 12);
+    bass = bassBins.reduce((a, b) => a + b, 0) / bassBins.length / 255;
+  }
+
+  // Enviar [bass, time] empaquetados en Float32Array al buffer de la GPU
+  device.queue.writeBuffer(uniformBuffer, 0, new Float32Array([bass, time]));
+
   const textureView = context.getCurrentTexture().createView();
-
-  // 2. Configurar el pase de renderizado (limpiar pantalla con color oscuro)
   const colorAttachment: GPURenderPassColorAttachment = {
     view: textureView,
-    clearValue: { r: 0.07, g: 0.08, b: 0.1, a: 1.0 }, // #13151A
+    clearValue: { r: 0.07, g: 0.08, b: 0.1, a: 1.0 },
     loadOp: 'clear',
     storeOp: 'store',
   };
@@ -152,12 +213,13 @@ function drawWebGPU() {
     colorAttachments: [colorAttachment],
   });
 
-  // Ejecutar el pipeline gráfico en la GPU
   passEncoder.setPipeline(pipeline);
-  passEncoder.draw(3, 1, 0, 0); // Dibuja el triángulo base
+  passEncoder.setBindGroup(0, bindGroup);
+  
+  // Dibuja 3 vértices por partícula, con un total de 100 instancias simultáneas
+  passEncoder.draw(3, 100, 0, 0); 
   passEncoder.end();
 
-  // Enviar los comandos a la cola de la GPU
   device.queue.submit([commandEncoder.finish()]);
 }
 
