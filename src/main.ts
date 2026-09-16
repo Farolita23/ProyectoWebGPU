@@ -388,8 +388,6 @@ window.addEventListener('keydown', (e) => {
 })
 
 // ---------- Buffer de uniforms ----------
-// bass, mid, treble, time, rotationOffset, rotationSpeed, audioSensitivity,
-// totalInstances, panX, panY, zoom, aspect  ->  12 floats = 48 bytes
 const uniformBuffer = device.createBuffer({
   size: 48,
   usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -441,7 +439,7 @@ function drawWebGPU() {
   passEncoder.setPipeline(pipeline)
   passEncoder.setBindGroup(0, bindGroup)
 
-  // 6 vértices (quad) por partícula, particleCount instancias controladas por el slider
+  // 6 vértices por partícula, particleCount instancias controladas por el slider
   passEncoder.draw(6, particleCount, 0, 0)
   passEncoder.end()
 
